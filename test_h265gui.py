@@ -204,6 +204,39 @@ def test_remove_original_loescht_lokal(tmp_path, monkeypatch):
     assert not src.exists()
 
 
+def test_remove_original_loescht_endgueltig(tmp_path, monkeypatch):
+    """permanent=True: weder Papierkorb noch _alt."""
+    gerufen = []
+    monkeypatch.setattr(h265gui, "send2trash", lambda p: gerufen.append(p))
+    monkeypatch.setattr(h265gui, "is_network", lambda p: False)
+    src = tmp_path / "film.mkv"
+    src.write_text("x")
+    meldung = remove_original(src, permanent=True)
+    assert not src.exists()
+    assert gerufen == [], "Papierkorb haette nicht benutzt werden duerfen"
+    assert not (tmp_path / ALT_DIR).exists()
+    assert "endgueltig" in meldung
+
+
+def test_remove_original_endgueltig_schlaegt_netzlaufwerk(tmp_path, monkeypatch):
+    """Auch auf Netzlaufwerken gilt der ausdrueckliche Loeschwunsch, kein _alt."""
+    monkeypatch.setattr(h265gui, "is_network", lambda p: True)
+    src = tmp_path / "film.mkv"
+    src.write_text("x")
+    remove_original(src, permanent=True)
+    assert not src.exists()
+    assert not (tmp_path / ALT_DIR).exists()
+
+
+def test_remove_original_ist_ohne_angabe_schonend(tmp_path, monkeypatch):
+    """Voreinstellung darf niemals endgueltig loeschen."""
+    monkeypatch.setattr(h265gui, "is_network", lambda p: True)
+    src = tmp_path / "film.mkv"
+    src.write_text("x")
+    remove_original(src)
+    assert (tmp_path / ALT_DIR / "film.mkv").exists()
+
+
 def test_is_network_lokal(tmp_path):
     assert is_network(tmp_path) is False
 
@@ -368,5 +401,7 @@ def test_gui_baut_sich_auf_und_scannt(tmp_path):
             if art == "row":
                 eintraege.append(last[0].name)
         assert eintraege == ["a.mkv"], f"_alt haette uebersprungen werden muessen: {eintraege}"
+        # Endgueltiges Loeschen muss man bewusst einschalten
+        assert app.permanent.get() is False
     finally:
         root.destroy()
