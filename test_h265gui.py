@@ -116,6 +116,17 @@ def test_build_cmd_mp4_laesst_bilduntertitel_weg():
     assert "0:s?" not in cmd
 
 
+def test_build_cmd_erzwingt_mp4_muxer_bei_m4v():
+    """Ohne -f mp4 waehlt ffmpeg bei .m4v den ipod-Muxer, der kein HEVC kann."""
+    cmd = build_cmd(Path("a.m4v"), Path("b.m4v"), "libx265", 24, leer())
+    assert cmd[cmd.index("-f") + 1] == "mp4"
+
+
+def test_build_cmd_erzwingt_muxer_nur_bei_m4v():
+    for ziel in ("b.mp4", "b.mkv", "b.mov"):
+        assert "-f" not in build_cmd(Path("a.mkv"), Path(ziel), "libx265", 24, leer())
+
+
 def test_build_cmd_setzt_hvc1_nur_bei_mp4():
     info = leer()
     assert "-tag:v" in build_cmd(Path("a.mp4"), Path("b.mp4"), "libx265", 24, info)
@@ -261,6 +272,23 @@ def test_avi_wird_nach_mkv_konvertiert(tmp_path):
     dst = target_for(src)
     assert dst.suffix == ".mkv"
     ok, msg = convert_one(src, dst, "libx265", 30, probe(src))
+    assert ok, msg
+    assert probe(dst)["codec"] == "hevc"
+
+
+@pytest.mark.ffmpeg
+@needs_ffmpeg
+def test_m4v_wird_konvertiert(tmp_path):
+    """Regression: .m4v landete beim ipod-Muxer und scheiterte am HEVC-Header."""
+    src = tmp_path / "folge.m4v"
+    ff("-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=25",
+       "-f", "lavfi", "-i", "sine=duration=2",
+       "-c:v", "libx264", "-c:a", "aac", str(src))
+    info = probe(src)
+    assert info["codec"] == "h264"
+    dst = target_for(src)
+    assert dst.suffix == ".m4v", "Endung soll erhalten bleiben"
+    ok, msg = convert_one(src, dst, "libx265", 30, info)
     assert ok, msg
     assert probe(dst)["codec"] == "hevc"
 
