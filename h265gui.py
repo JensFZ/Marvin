@@ -98,6 +98,10 @@ def build_cmd(src, dst, encoder, quality, info):
     cmd += ["-c:a", "copy"]
     if mp4ish:
         cmd += ["-tag:v", "hvc1"]
+    if ext == ".m4v":
+        # Anhand der Endung waehlt ffmpeg sonst den ipod-Muxer, der kein HEVC kennt
+        # ("Could not find tag for codec hevc in stream #0").
+        cmd += ["-f", "mp4"]
     cmd += ["-progress", "pipe:1", "-nostats", str(dst)]
     return cmd
 
