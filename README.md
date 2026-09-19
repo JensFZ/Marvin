@@ -149,7 +149,11 @@ git tag v1.0.0 && git push origin v1.0.0
 
 `.github/workflows/release.yml` führt dann die Tests aus, baut mit PyInstaller eine
 eigenständige `h265gui.exe` (rund 16 MB, Python und `send2trash` eingepackt) und hängt sie an
-einen GitHub-Release. Schlagen die Tests fehl, entsteht kein Release. Der Workflow lässt sich
+einen GitHub-Release. Schlagen die Tests fehl, entsteht kein Release. Vor dem Veröffentlichen
+wird die gebaute Exe mit `--selfcheck` tatsächlich gestartet: Sie baut das Fenster auf und
+beendet sich wieder. Fehlt `send2trash` in der Exe, endet der Check mit Exit-Code 3 und der
+Release entfällt — sonst würde sie Originale still endgültig löschen statt sie in den
+Papierkorb zu legen. Der Workflow lässt sich
 auch von Hand über *Actions → Release → Run workflow* starten.
 
 ## Grenzen

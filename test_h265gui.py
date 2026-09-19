@@ -8,6 +8,7 @@ brauchen ffmpeg/ffprobe im PATH.
 """
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -379,6 +380,39 @@ def test_verify_erkennt_zu_kurze_ausgabe(sample, tmp_path):
 
 
 # ----------------------------------------------------------------------- GUI
+
+def run_selfcheck(args):
+    """Startet das Skript in einem eigenen Prozess. Ob eine Anzeige da ist, zeigt sich dort.
+
+    Bewusst kein tk.Tk() im Pytest-Prozess als Vorpruefung: mehrere Tk-Wurzeln nacheinander
+    sind hier unzuverlaessig ("Can't find a usable tk.tcl") und wuerden auch den
+    Smoke-Test unten zufaellig ueberspringen lassen.
+    """
+    r = subprocess.run([sys.executable, *args], capture_output=True, text=True, timeout=60)
+    if "TclError" in r.stderr:
+        pytest.skip(f"keine Anzeige verfuegbar: {r.stderr.strip().splitlines()[-1]}")
+    return r
+
+
+@needs_ffmpeg
+def test_selfcheck_startet_und_beendet_sich():
+    """--selfcheck ist der Startcheck der Release-Exe; hier gegen das Skript."""
+    r = run_selfcheck([h265gui.__file__, "--selfcheck"])
+    if h265gui.send2trash is not None:
+        assert r.returncode == 0, (r.returncode, r.stderr)
+    else:
+        assert r.returncode == 3, (r.returncode, r.stderr)
+
+
+@needs_ffmpeg
+def test_selfcheck_schlaegt_fehl_ohne_send2trash():
+    """Eine Exe ohne send2trash wuerde Originale still endgueltig loeschen."""
+    code = ("import sys, runpy; sys.modules['send2trash'] = None; "
+            "sys.argv = ['h265gui.py', '--selfcheck']; "
+            f"runpy.run_path({h265gui.__file__!r}, run_name='__main__')")
+    r = run_selfcheck(["-c", code])
+    assert r.returncode == 3, (r.returncode, r.stderr)
+
 
 def test_gui_baut_sich_auf_und_scannt(tmp_path):
     """Smoke-Test: Fenster aufbauen, Ordner scannen, HEVC-Dateien ausgrauen."""

@@ -10,6 +10,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -494,6 +495,13 @@ class App:
 
 
 if __name__ == "__main__":
+    selfcheck = "--selfcheck" in sys.argv
     root = tk.Tk()
     App(root)
+    if selfcheck:
+        # Startcheck fuer die CI: Fenster baut sich auf, mainloop laeuft, sauberes Ende.
+        root.after(300, root.destroy)
     root.mainloop()
+    if selfcheck and send2trash is None:
+        # Eine Exe ohne send2trash wuerde Originale still endgueltig loeschen.
+        sys.exit(3)

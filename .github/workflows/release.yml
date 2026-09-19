@@ -1,4 +1,4 @@
-name: Release
+﻿name: Release
 
 # Ausgeloest von einem Versions-Tag, z.B.:  git tag v1.0.0 && git push origin v1.0.0
 on:
@@ -18,9 +18,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -46,6 +46,21 @@ jobs:
           $mb = (Get-Item dist\h265gui.exe).Length / 1MB
           Write-Host ("Exe gebaut: {0:N1} MB" -f $mb)
           if ($mb -lt 3) { throw "Exe ist verdaechtig klein" }
+
+      # Die Exe wirklich starten, nicht nur ihre Groesse ansehen. --selfcheck baut das
+      # Fenster auf, beendet sich nach 300 ms und meldet Exit-Code 3, wenn send2trash
+      # nicht eingepackt wurde (die Exe wuerde Originale sonst still endgueltig loeschen).
+      - name: Exe startet
+        run: |
+          $p = Start-Process dist\h265gui.exe -ArgumentList "--selfcheck" -PassThru
+          $null = $p.Handle   # ohne das ist ExitCode nach WaitForExit teils leer
+          if (-not $p.WaitForExit(60000)) {
+            $p.Kill()
+            throw "Exe hat sich nicht innerhalb von 60 s beendet"
+          }
+          if ($p.ExitCode -eq 3) { throw "send2trash fehlt in der Exe" }
+          if ($p.ExitCode -ne 0) { throw "Startcheck fehlgeschlagen, Exit-Code $($p.ExitCode)" }
+          Write-Host "Exe startet und beendet sich sauber"
 
       - name: Version bestimmen
         id: v
