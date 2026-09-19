@@ -186,12 +186,17 @@ def move_to_alt(src):
     return target
 
 
-def remove_original(src):
+def remove_original(src, permanent=False):
     """Original wegraeumen. Gibt Hinweistext zurueck.
 
-    Netzlaufwerk -> nach _alt/ verschieben, weil Windows dort am Papierkorb vorbei
-    endgueltig loescht. Lokal -> Papierkorb (bzw. loeschen, falls send2trash fehlt).
+    permanent=True loescht sofort und unwiderruflich - weder Papierkorb noch _alt.
+    Sonst: Netzlaufwerk -> nach _alt/ verschieben, weil Windows dort am Papierkorb
+    vorbei endgueltig loescht. Lokal -> Papierkorb (bzw. loeschen, falls send2trash
+    fehlt).
     """
+    if permanent:
+        os.remove(src)
+        return "Original endgueltig geloescht"
     if is_network(src):
         target = move_to_alt(src)
         return f"Netzlaufwerk: Original nach {ALT_DIR}/{target.name} verschoben"
@@ -250,7 +255,10 @@ class App:
         ttk.Spinbox(bar, from_=14, to=35, textvariable=self.quality,
                     width=4).pack(side="left", padx=(4, 12))
         ttk.Button(bar, text="Alle nicht-HEVC waehlen",
-                   command=self.select_convertible).pack(side="left")
+                   command=self.select_convertible).pack(side="left", padx=(0, 12))
+        self.permanent = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Originale endgueltig loeschen",
+                        variable=self.permanent).pack(side="left")
         self.cancel_btn = ttk.Button(bar, text="Abbrechen", state="disabled",
                                      command=self.on_cancel)
         self.cancel_btn.pack(side="right")
@@ -386,8 +394,8 @@ class App:
         self.file_lbl.configure(text="scanne...")
         if is_network(self.folder):
             self.write_log(f"Netzlaufwerk erkannt - dort gibt es keinen Papierkorb. "
-                           f"Originale werden nach <ordner>\\{ALT_DIR}\\ verschoben "
-                           f"statt geloescht.")
+                           f"Originale werden nach <ordner>\\{ALT_DIR}\\ verschoben, "
+                           f"sofern 'endgueltig loeschen' nicht angehakt ist.")
         threading.Thread(target=self.scan, daemon=True).start()
 
     def scan(self):
@@ -412,11 +420,19 @@ class App:
             messagebox.showinfo("Nichts zu tun",
                                 "Keine konvertierbaren Dateien ausgewaehlt.")
             return
+        # tkinter-Variablen nur hier im Main-Thread auslesen und mitgeben
+        permanent = self.permanent.get()
+        if permanent and not messagebox.askokcancel(
+                "Originale endgueltig loeschen?",
+                f"{len(todo)} Original(e) werden nach erfolgreicher Konvertierung "
+                f"sofort geloescht - ohne Papierkorb und ohne {ALT_DIR}.\n\n"
+                f"Das laesst sich nicht rueckgaengig machen.",
+                icon="warning", default="cancel"):
+            return
         self.cancel.clear()
         self.set_busy(True)
-        # tkinter-Variablen nur hier im Main-Thread auslesen und mitgeben
         threading.Thread(target=self.run_batch,
-                         args=(todo, self.encoder.get(), self.quality.get()),
+                         args=(todo, self.encoder.get(), self.quality.get(), permanent),
                          daemon=True).start()
 
     def on_cancel(self):
@@ -425,7 +441,7 @@ class App:
             self.proc.terminate()
         self.q.put(("log", "Abbruch angefordert..."))
 
-    def run_batch(self, todo, encoder, quality):
+    def run_batch(self, todo, encoder, quality, permanent=False):
         n = len(todo)
         try:
             for i, iid in enumerate(todo, 1):
@@ -450,7 +466,7 @@ class App:
                     self.fail(iid, f"FEHLER {src.name}: {msg}")
                     continue
                 try:
-                    note = remove_original(src)
+                    note = remove_original(src, permanent)
                 except Exception as e:
                     self.fail(iid, f"WARNUNG {src.name}: konvertiert nach {dst.name}, "
                                    f"aber Original nicht entfernt ({e})")

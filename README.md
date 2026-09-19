@@ -45,7 +45,8 @@ python h265gui.py
 2. Die Liste zeigt Datei, Codec, Größe und Laufzeit. Dateien, die **bereits HEVC** sind,
    erscheinen grau und werden von der Konvertierung ausgenommen.
 3. **Auswählen** per Strg- bzw. Shift-Klick, oder über *Alle nicht-HEVC wählen*.
-4. **Encoder und Qualität** einstellen (siehe unten).
+4. **Encoder und Qualität** einstellen (siehe unten), und ob die Originale geschont oder
+   endgültig gelöscht werden sollen.
 5. **Konvertieren** — der obere Balken zeigt die laufende Datei, der untere den Gesamtfortschritt.
    *Abbrechen* stoppt den laufenden ffmpeg-Prozess.
 
@@ -84,6 +85,12 @@ Das Original wird **nur dann** entfernt, wenn alle drei Prüfungen bestehen:
 3. ein erneutes `ffprobe` meldet `hevc` und eine Laufzeit, die um weniger als 1 % abweicht
 
 Schlägt etwas fehl, wird die unfertige Zieldatei gelöscht und das Original bleibt unberührt.
+
+Wie das Original danach verschwindet, steuert der Haken **Originale endgültig löschen** in der
+Werkzeugleiste. Er ist standardmäßig aus; dann gilt das Verhalten in den beiden folgenden
+Abschnitten. Ist er gesetzt, wird das Original direkt gelöscht — ohne Papierkorb, ohne `_alt`,
+auch auf Netzlaufwerken. Vor dem Start fragt das Programm in dem Fall einmal nach und nennt die
+Anzahl der betroffenen Dateien.
 
 ### Lokale Laufwerke
 
