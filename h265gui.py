@@ -23,6 +23,9 @@ from tkinter import filedialog, messagebox, ttk
 VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".flv", ".webm",
              ".mpg", ".mpeg", ".ts", ".m2ts"}
 TEXT_SUBS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "text"}
+# Container, die HEVC aufnehmen koennen. Alles andere (avi, wmv, flv, mpg, webm)
+# wird nach mkv geschrieben - avi schluckt den Stream sonst als 'rawvideo'.
+HEVC_OK = {".mkv", ".mp4", ".m4v", ".mov", ".ts", ".m2ts"}
 ALT_DIR = "_alt"        # Ablage fuer Originale auf Netzlaufwerken (dort gibt es keinen Papierkorb)
 DRIVE_REMOTE = 4
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -69,6 +72,12 @@ def discard(path):
         except PermissionError:
             time.sleep(0.2)
     return False
+
+
+def target_for(src):
+    """Zielpfad <name>.h265<ext>. Container ohne HEVC-Unterstuetzung werden zu mkv."""
+    ext = src.suffix if src.suffix.lower() in HEVC_OK else ".mkv"
+    return src.with_name(f"{src.stem}.h265{ext}")
 
 
 def build_cmd(src, dst, encoder, quality, info):
@@ -402,7 +411,10 @@ class App:
             return
         self.cancel.clear()
         self.set_busy(True)
-        threading.Thread(target=self.run_batch, args=(todo,), daemon=True).start()
+        # tkinter-Variablen nur hier im Main-Thread auslesen und mitgeben
+        threading.Thread(target=self.run_batch,
+                         args=(todo, self.encoder.get(), self.quality.get()),
+                         daemon=True).start()
 
     def on_cancel(self):
         self.cancel.set()
@@ -410,38 +422,43 @@ class App:
             self.proc.terminate()
         self.q.put(("log", "Abbruch angefordert..."))
 
-    def run_batch(self, todo):
+    def run_batch(self, todo, encoder, quality):
         n = len(todo)
-        for i, iid in enumerate(todo, 1):
-            if self.cancel.is_set():
-                break
-            src = Path(iid)
-            self.q.put(("totalprog", (i, n)))
-            self.q.put(("fileprog", (src.name, 0)))
-            dst = src.with_name(f"{src.stem}.h265{src.suffix}")
-            if not src.exists():
-                self.fail(iid, f"UEBERSPRUNGEN {src.name}: nicht mehr vorhanden")
-                continue
-            if dst.exists():
-                self.fail(iid, f"UEBERSPRUNGEN {src.name}: {dst.name} existiert bereits")
-                continue
-            ok, msg = convert_one(
-                src, dst, self.encoder.get(), self.quality.get(), self.info[iid],
-                on_progress=lambda pct, nm=src.name: self.q.put(("fileprog", (nm, pct))),
-                cancel=self.cancel,
-                proc_sink=lambda p: setattr(self, "proc", p))
-            if not ok:
-                self.fail(iid, f"FEHLER {src.name}: {msg}")
-                continue
-            try:
-                note = remove_original(src)
-            except Exception as e:
-                self.fail(iid, f"WARNUNG {src.name}: konvertiert nach {dst.name}, "
-                               f"aber Original nicht entfernt ({e})")
-                continue
-            self.q.put(("log", f"OK {src.name} -> {dst.name} ({note})"))
-            self.q.put(("swap", (iid, dst)))
-        self.q.put(("finished", None))
+        try:
+            for i, iid in enumerate(todo, 1):
+                if self.cancel.is_set():
+                    break
+                src = Path(iid)
+                self.q.put(("totalprog", (i, n)))
+                self.q.put(("fileprog", (src.name, 0)))
+                dst = target_for(src)
+                if not src.exists():
+                    self.fail(iid, f"UEBERSPRUNGEN {src.name}: nicht mehr vorhanden")
+                    continue
+                if dst.exists():
+                    self.fail(iid, f"UEBERSPRUNGEN {src.name}: {dst.name} existiert bereits")
+                    continue
+                ok, msg = convert_one(
+                    src, dst, encoder, quality, self.info[iid],
+                    on_progress=lambda pct, nm=src.name: self.q.put(("fileprog", (nm, pct))),
+                    cancel=self.cancel,
+                    proc_sink=lambda p: setattr(self, "proc", p))
+                if not ok:
+                    self.fail(iid, f"FEHLER {src.name}: {msg}")
+                    continue
+                try:
+                    note = remove_original(src)
+                except Exception as e:
+                    self.fail(iid, f"WARNUNG {src.name}: konvertiert nach {dst.name}, "
+                                   f"aber Original nicht entfernt ({e})")
+                    continue
+                self.q.put(("log", f"OK {src.name} -> {dst.name} ({note})"))
+                self.q.put(("swap", (iid, dst)))
+        except Exception as e:
+            self.q.put(("log", f"ABBRUCH durch internen Fehler: {e!r}"))
+        finally:
+            # muss in jedem Fall raus, sonst bleibt die GUI auf 'busy' haengen
+            self.q.put(("finished", None))
 
     def fail(self, iid, msg):
         self.q.put(("log", msg))
@@ -508,6 +525,22 @@ def selftest():
         ok, msg = convert_one(src, cdst, "libx265", 30, info, cancel=cancel)
         assert not ok and msg == "abgebrochen", (ok, msg)
         assert not cdst.exists(), "Teil-Datei nach Abbruch nicht aufgeraeumt"
+
+        # avi kann kein HEVC -> Ziel muss mkv werden, sonst landet 'rawvideo' darin
+        assert target_for(Path("x.avi")).name == "x.h265.mkv"
+        assert target_for(Path("x.mkv")).name == "x.h265.mkv"
+        assert target_for(Path("x.MP4")).name == "x.h265.MP4"
+        avi = d / "alt.avi"
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+             "-i", "testsrc=duration=3:size=320x240:rate=25", "-c:v", "mpeg4", str(avi)],
+            check=True, creationflags=NO_WINDOW)
+        ainfo = probe(avi)
+        assert ainfo["codec"] == "mpeg4", ainfo
+        adst = target_for(avi)
+        ok, msg = convert_one(avi, adst, "libx265", 30, ainfo)
+        assert ok, msg
+        assert probe(adst)["codec"] == "hevc", probe(adst)
 
         # Netzlaufwerk-Variante: Original nach _alt/ statt in den Papierkorb
         a, b = d / "orig.mkv", d / "sub" / "orig.mkv"
