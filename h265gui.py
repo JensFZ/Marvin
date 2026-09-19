@@ -27,6 +27,7 @@ TEXT_SUBS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "text"}
 # wird nach mkv geschrieben - avi schluckt den Stream sonst als 'rawvideo'.
 HEVC_OK = {".mkv", ".mp4", ".m4v", ".mov", ".ts", ".m2ts"}
 ALT_DIR = "_alt"        # Ablage fuer Originale auf Netzlaufwerken (dort gibt es keinen Papierkorb)
+MIN_SAVING = 0.05       # Original wird nur ersetzt, wenn HEVC mindestens so viel kleiner ist
 DRIVE_REMOTE = 4
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
@@ -225,6 +226,23 @@ def human_dur(s):
     return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}"
 
 
+def worth_keeping(src_size, dst_size):
+    """True, wenn das HEVC-Ergebnis klein genug ist, um das Original zu ersetzen.
+
+    Bei bereits gut komprimierten Quellen kann HEVC groesser werden; dann waere der Tausch
+    Platzverlust plus Risiko fuer nichts. Gelesen wird MIN_SAVING erst beim Aufruf.
+    """
+    return dst_size <= src_size * (1 - MIN_SAVING)
+
+
+def saving_text(old_size, new_size):
+    """Ersparnis fuer die Liste, z.B. '-38 %'. Positiv ('+4 %'), falls doch groesser."""
+    if old_size <= 0:
+        return ""
+    pct = round((new_size / old_size - 1) * 100)
+    return f"{pct:+d} %" if pct else "0 %"
+
+
 # ----------------------------------------------------------------------- GUI
 
 class App:
@@ -238,6 +256,7 @@ class App:
         self.cancel = threading.Event()
         self.proc = None
         self.busy = False
+        self.saved = 0          # Bytes, die der laufende Batch gespart hat
 
         top = ttk.Frame(root, padding=8)
         top.pack(fill="x")
@@ -266,16 +285,17 @@ class App:
         self.start_btn = ttk.Button(bar, text="Konvertieren", command=self.on_start)
         self.start_btn.pack(side="right", padx=6)
 
-        self.tree = ttk.Treeview(root, columns=("codec", "size", "dur"),
+        self.tree = ttk.Treeview(root, columns=("codec", "size", "dur", "saved"),
                                  selectmode="extended")
         self.tree.heading("#0", text="Datei")
-        self.tree.column("#0", width=560)
+        self.tree.column("#0", width=480)
         for c, t, w in (("codec", "Codec", 90), ("size", "Groesse", 100),
-                        ("dur", "Laufzeit", 90)):
+                        ("dur", "Laufzeit", 90), ("saved", "Ersparnis", 80)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="e")
         self.tree.tag_configure("already", foreground="#909090")
         self.tree.tag_configure("failed", foreground="#c00000")
+        self.tree.tag_configure("kept", foreground="#b36b00")
         self.tree.tag_configure("done", foreground="#008000")
         self.tree.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -323,10 +343,11 @@ class App:
 
     def _on_row(self, p):
         path, info, size = p
+        info["size"] = size
         self.info[str(path)] = info
         self.tree.insert("", "end", iid=str(path),
                          text=str(path.relative_to(self.folder)),
-                         values=(info["codec"], human_size(size), human_dur(info["dur"])),
+                         values=(info["codec"], human_size(size), human_dur(info["dur"]), ""),
                          tags=("already",) if info["codec"] == "hevc" else ())
 
     def _on_scandone(self, n):
@@ -353,24 +374,29 @@ class App:
 
     def _on_swap(self, p):
         """Zeile des Originals durch die konvertierte Datei ersetzen."""
-        old_iid, dst = p
+        old_iid, dst, old_size = p
         if not self.tree.exists(old_iid):
             return
         idx = self.tree.index(old_iid)
         self.tree.delete(old_iid)
         self.info.pop(old_iid, None)
         info = probe(dst)
+        info["size"] = new_size = dst.stat().st_size
         self.info[str(dst)] = info
+        self.saved += old_size - new_size
         self.tree.insert("", idx, iid=str(dst),
                          text=str(dst.relative_to(self.folder)),
-                         values=(info["codec"], human_size(dst.stat().st_size),
-                                 human_dur(info["dur"])),
+                         values=(info["codec"], human_size(new_size),
+                                 human_dur(info["dur"]), saving_text(old_size, new_size)),
                          tags=("done",))
 
     def _on_finished(self, _):
         self.set_busy(False)
         self.file_bar["value"] = 0
-        self.file_lbl.configure(text="fertig")
+        text = "fertig"
+        if self.saved > 0:
+            text += f" - {human_size(self.saved)} gespart"
+        self.file_lbl.configure(text=text)
 
     def set_busy(self, busy):
         self.busy = busy
@@ -431,6 +457,7 @@ class App:
                 icon="warning", default="cancel"):
             return
         self.cancel.clear()
+        self.saved = 0
         self.set_busy(True)
         threading.Thread(target=self.run_batch,
                          args=(todo, self.encoder.get(), self.quality.get(), permanent),
@@ -466,14 +493,24 @@ class App:
                 if not ok:
                     self.fail(iid, f"FEHLER {src.name}: {msg}")
                     continue
+                src_size, dst_size = src.stat().st_size, dst.stat().st_size
+                if not worth_keeping(src_size, dst_size):
+                    discard(dst)
+                    self.q.put(("log", (
+                        f"BEHALTEN {src.name}: HEVC spart zu wenig "
+                        f"({human_size(dst_size)} statt {human_size(src_size)}, "
+                        f"mindestens {MIN_SAVING:.0%} noetig) - Original bleibt")))
+                    self.q.put(("mark", (iid, "kept")))
+                    continue
                 try:
                     note = remove_original(src, permanent)
                 except Exception as e:
                     self.fail(iid, f"WARNUNG {src.name}: konvertiert nach {dst.name}, "
                                    f"aber Original nicht entfernt ({e})")
                     continue
-                self.q.put(("log", f"OK {src.name} -> {dst.name} ({note})"))
-                self.q.put(("swap", (iid, dst)))
+                self.q.put(("log", f"OK {src.name} -> {dst.name} "
+                                   f"({saving_text(src_size, dst_size)}, {note})"))
+                self.q.put(("swap", (iid, dst, src_size)))
         except Exception as e:
             self.q.put(("log", f"ABBRUCH durch internen Fehler: {e!r}"))
         finally:

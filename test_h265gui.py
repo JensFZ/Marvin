@@ -16,7 +16,8 @@ import pytest
 
 import h265gui
 from h265gui import (ALT_DIR, build_cmd, convert_one, discard, human_dur, human_size,
-                     is_network, move_to_alt, probe, remove_original, target_for, verify)
+                     is_network, move_to_alt, probe, remove_original, saving_text,
+                     target_for, verify, worth_keeping)
 
 HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 needs_ffmpeg = pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg/ffprobe nicht im PATH")
@@ -414,28 +415,134 @@ def test_selfcheck_schlaegt_fehl_ohne_send2trash():
     assert r.returncode == 3, (r.returncode, r.stderr)
 
 
-def test_gui_baut_sich_auf_und_scannt(tmp_path):
-    """Smoke-Test: Fenster aufbauen, Ordner scannen, HEVC-Dateien ausgrauen."""
+@pytest.fixture(scope="module")
+def tk_root():
+    """Genau ein tk.Tk() pro Testlauf - mehrere sind hier unzuverlaessig (siehe oben)."""
     tk = pytest.importorskip("tkinter")
     try:
         root = tk.Tk()
     except tk.TclError as e:
         pytest.skip(f"keine Anzeige verfuegbar: {e}")
-    try:
-        app = h265gui.App(root)
-        # Scan ohne Thread, damit der Test deterministisch bleibt
-        (tmp_path / "a.mkv").write_text("x")
-        (tmp_path / ALT_DIR).mkdir()
-        (tmp_path / ALT_DIR / "weggeraeumt.mkv").write_text("x")
-        app.folder = tmp_path
-        app.scan()
-        eintraege = []
-        while not app.q.empty():
-            art, last = app.q.get()
-            if art == "row":
-                eintraege.append(last[0].name)
-        assert eintraege == ["a.mkv"], f"_alt haette uebersprungen werden muessen: {eintraege}"
-        # Endgueltiges Loeschen muss man bewusst einschalten
-        assert app.permanent.get() is False
-    finally:
-        root.destroy()
+    root.withdraw()
+    yield root
+    root.destroy()
+
+
+@pytest.fixture
+def app(tk_root, monkeypatch):
+    """Frische App in einem eigenen Toplevel. Ohne Dialoge, die einen Test blockieren koennten."""
+    import tkinter as tk
+    monkeypatch.setattr(h265gui.messagebox, "showerror", lambda *a, **k: None)
+    win = tk.Toplevel(tk_root)
+    win.withdraw()
+    yield h265gui.App(win)
+    win.destroy()
+
+
+def drain(app):
+    """Verarbeitet die Queue wie pump() - nur synchron und ohne mainloop."""
+    while not app.q.empty():
+        kind, payload = app.q.get()
+        getattr(app, "_on_" + kind)(payload)
+
+
+def logtext(app):
+    return app.log.get("1.0", "end")
+
+
+def test_gui_baut_sich_auf_und_scannt(app, tmp_path):
+    """Smoke-Test: Fenster aufbauen, Ordner scannen, HEVC-Dateien ausgrauen."""
+    # Scan ohne Thread, damit der Test deterministisch bleibt
+    (tmp_path / "a.mkv").write_text("x")
+    (tmp_path / ALT_DIR).mkdir()
+    (tmp_path / ALT_DIR / "weggeraeumt.mkv").write_text("x")
+    app.folder = tmp_path
+    app.scan()
+    eintraege = []
+    while not app.q.empty():
+        art, last = app.q.get()
+        if art == "row":
+            eintraege.append(last[0].name)
+    assert eintraege == ["a.mkv"], f"_alt haette uebersprungen werden muessen: {eintraege}"
+    # Endgueltiges Loeschen muss man bewusst einschalten
+    assert app.permanent.get() is False
+
+
+# ----------------------------------------------------------------- Platz-Schutz
+
+@pytest.mark.parametrize("alt, neu, erwartet", [
+    (1000, 500, True),      # deutlich kleiner
+    (1000, 900, True),      # 10 % gespart
+    (1000, 949, True),      # knapp ueber der Schwelle
+    (1000, 951, False),     # knapp darunter
+    (1000, 1000, False),    # gleich gross
+    (1000, 1200, False),    # groesser geworden
+])
+def test_worth_keeping(alt, neu, erwartet):
+    assert worth_keeping(alt, neu) is erwartet
+
+
+def test_worth_keeping_liest_schwelle_beim_aufruf(monkeypatch):
+    monkeypatch.setattr(h265gui, "MIN_SAVING", 0.5)
+    assert worth_keeping(1000, 600) is False
+    assert worth_keeping(1000, 400) is True
+
+
+@pytest.mark.parametrize("alt, neu, erwartet", [
+    (1000, 620, "-38 %"),
+    (1000, 1000, "0 %"),
+    (1000, 1040, "+4 %"),
+    (1000, 999, "0 %"),        # unter einem halben Prozent rundet auf 0
+    (0, 100, ""),              # keine Division durch null
+])
+def test_saving_text(alt, neu, erwartet):
+    assert saving_text(alt, neu) == erwartet
+
+
+def test_finished_zeigt_summe_nur_wenn_gespart(app):
+    app.saved = 5 * 1024 ** 3
+    app._on_finished(None)
+    assert "5.0 GB gespart" in app.file_lbl.cget("text")
+    app.saved = 0
+    app._on_finished(None)
+    assert app.file_lbl.cget("text") == "fertig"
+
+
+def batch_setup(app, tmp_path):
+    """Legt ein kurzes h264-Video an und traegt es wie nach einem Scan in die Liste ein."""
+    src = tmp_path / "folge.mkv"
+    ff("-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=25",
+       "-c:v", "libx264", str(src))
+    app.folder = tmp_path
+    app._on_row((src, probe(src), src.stat().st_size))
+    return src
+
+
+@pytest.mark.ffmpeg
+@needs_ffmpeg
+def test_zu_grosses_ergebnis_laesst_original_liegen(app, tmp_path, monkeypatch):
+    src = batch_setup(app, tmp_path)
+    monkeypatch.setattr(h265gui, "MIN_SAVING", 0.99)   # jedes Ergebnis ist "zu gross"
+    app.run_batch([str(src)], "libx265", 30, permanent=True)
+    drain(app)
+    assert src.exists(), "Original wurde trotz zu geringer Ersparnis entfernt"
+    assert not (tmp_path / "folge.h265.mkv").exists(), "HEVC-Datei nicht verworfen"
+    assert app.tree.item(str(src), "tags") == ("kept",)
+    assert "BEHALTEN folge.mkv" in logtext(app)
+    assert app.saved == 0
+
+
+@pytest.mark.ffmpeg
+@needs_ffmpeg
+def test_ausreichende_ersparnis_ersetzt_original(app, tmp_path, monkeypatch):
+    src = batch_setup(app, tmp_path)
+    alt_size = src.stat().st_size
+    monkeypatch.setattr(h265gui, "MIN_SAVING", -100.0)  # jedes Ergebnis ist "klein genug"
+    app.run_batch([str(src)], "libx265", 30, permanent=True)
+    drain(app)
+    neu = tmp_path / "folge.h265.mkv"
+    assert neu.exists() and not src.exists()
+    assert app.tree.item(str(neu), "tags") == ("done",)
+    assert app.tree.set(str(neu), "saved") == saving_text(alt_size, neu.stat().st_size)
+    assert app.saved == alt_size - neu.stat().st_size
+    assert "OK folge.mkv" in logtext(app)
