@@ -50,7 +50,8 @@ python h265gui.py
 5. **Konvertieren** — der obere Balken zeigt die laufende Datei, der untere den Gesamtfortschritt.
    *Abbrechen* stoppt den laufenden ffmpeg-Prozess.
 
-Farben in der Liste: grau = schon HEVC, grün = konvertiert, rot = fehlgeschlagen.
+Farben in der Liste: grau = schon HEVC, grün = konvertiert, orange = Original behalten (HEVC
+hätte zu wenig gespart), rot = fehlgeschlagen.
 Fehlermeldungen landen im Log unten.
 
 ## Encoder und Qualität
@@ -78,13 +79,23 @@ Container, die kein HEVC transportieren können (`avi`, `wmv`, `flv`, `mpg`, `we
 nach **mkv** geschrieben — `Alt.avi` wird zu `Alt.h265.mkv`. AVI würde den Stream sonst
 klaglos als `rawvideo` ablegen.
 
-Das Original wird **nur dann** entfernt, wenn alle drei Prüfungen bestehen:
+Das Original wird **nur dann** entfernt, wenn alle vier Prüfungen bestehen:
 
 1. ffmpeg endet mit Rückgabewert 0
 2. die Zieldatei existiert und ist nicht leer
 3. ein erneutes `ffprobe` meldet `hevc` und eine Laufzeit, die um weniger als 1 % abweicht
+4. die Zieldatei ist mindestens **5 % kleiner** als das Original
 
 Schlägt etwas fehl, wird die unfertige Zieldatei gelöscht und das Original bleibt unberührt.
+
+Die vierte Prüfung gilt auch beim endgültigen Löschen. Sie schützt vor Quellen, die schon
+knapp komprimiert sind: dort wird HEVC gelegentlich sogar größer, und der Tausch wäre Platzverlust
+bei gleichzeitigem Risiko. Solche Dateien behalten ihr Original, die HEVC-Version wird verworfen,
+die Zeile erscheint orange und im Log steht `BEHALTEN` mit beiden Größen. Da sich das Ergebnis
+nicht vorhersagen lässt, ist die Kodierung dann umsonst gelaufen.
+
+Die Liste zeigt pro konvertierter Datei die **Ersparnis** (`-38 %`), am Ende steht die
+Gesamtsumme in der Statuszeile.
 
 Wie das Original danach verschwindet, steuert der Haken **Originale endgültig löschen** in der
 Werkzeugleiste. Er ist standardmäßig aus; dann gilt das Verhalten in den beiden folgenden
