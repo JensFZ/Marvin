@@ -1,0 +1,78 @@
+name: Release
+
+# Ausgeloest von einem Versions-Tag, z.B.:  git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, z.B. v1.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: ffmpeg bereitstellen
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg --no-progress -y
+          }
+
+      - name: Abhaengigkeiten installieren
+        run: python -m pip install --upgrade pip pytest send2trash pyinstaller
+
+      # Kein Release aus rotem Code.
+      - name: Tests
+        run: python -m pytest
+
+      - name: Exe bauen
+        run: pyinstaller --onefile --windowed --name h265gui h265gui.py
+
+      - name: Exe pruefen
+        run: |
+          if (-not (Test-Path dist\h265gui.exe)) { throw "dist\h265gui.exe fehlt" }
+          $mb = (Get-Item dist\h265gui.exe).Length / 1MB
+          Write-Host ("Exe gebaut: {0:N1} MB" -f $mb)
+          if ($mb -lt 3) { throw "Exe ist verdaechtig klein" }
+
+      - name: Version bestimmen
+        id: v
+        run: |
+          $v = "${{ github.event.inputs.version }}"
+          if (-not $v) { $v = $env:GITHUB_REF_NAME }
+          if ($v -notmatch '^v') { throw "Unerwartete Version: $v" }
+          Write-Host "Version: $v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          $notes = @'
+          ## Installation
+
+          `h265gui.exe` herunterladen und starten - eine Python-Installation wird nicht gebraucht.
+
+          **ffmpeg muss getrennt vorhanden sein** und im `PATH` liegen:
+
+              winget install Gyan.FFmpeg
+
+          Fehlt ffmpeg, meldet das Programm das beim Start. Fuer die GPU-Kodierung
+          (`hevc_nvenc`) wird zusaetzlich eine NVIDIA-Karte mit NVENC gebraucht;
+          ohne sie bleibt `libx265` auf der CPU.
+          '@
+          $notes | Out-File -FilePath notes.md -Encoding utf8
+          gh release create "$env:VERSION" dist\h265gui.exe --title "H265-Konverter $env:VERSION" --notes-file notes.md --generate-notes
