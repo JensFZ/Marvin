@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """H265-Konverter: Ordner scannen, Codecs anzeigen, ausgewaehlte Dateien per ffmpeg nach HEVC umkodieren.
 
 Start:  python h265gui.py
-Test:   python h265gui.py --selftest
+Test:   pytest
 """
 import ctypes
 import json
@@ -10,7 +10,6 @@ import os
 import queue
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -474,96 +473,7 @@ class App:
         self.root.destroy()
 
 
-# ------------------------------------------------------------------ Selftest
-
-def selftest():
-    """Prueft die ffmpeg-Kette end-to-end: kodieren, verifizieren, Fehlerfall."""
-    assert shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe fehlen"
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp)
-        src = d / "test_h264.mkv"
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error",
-             "-f", "lavfi", "-i", "testsrc=duration=5:size=320x240:rate=25",
-             "-f", "lavfi", "-i", "sine=duration=5",
-             "-c:v", "libx264", "-c:a", "aac", str(src)],
-            check=True, creationflags=NO_WINDOW)
-
-        info = probe(src)
-        assert info["codec"] == "h264", info
-        assert 4.5 < info["dur"] < 5.5, info
-
-        seen = []
-        dst = src.with_name(f"{src.stem}.h265{src.suffix}")
-        ok, msg = convert_one(src, dst, "libx265", 30, info, on_progress=seen.append)
-        assert ok, msg
-        assert seen and max(seen) > 0, "kein Fortschritt gemeldet"
-        out = probe(dst)
-        assert out["codec"] == "hevc", out
-        assert abs(out["dur"] - info["dur"]) < 0.5, out
-        codecs = [s["codec_name"] for s in json.loads(subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "stream=codec_name",
-             "-of", "json", str(dst)], capture_output=True, text=True,
-            creationflags=NO_WINDOW).stdout)["streams"]]
-        assert "aac" in codecs, codecs
-
-        # Fehlerfall: keine gueltige Videodatei -> kein Rest auf der Platte
-        bad = d / "kaputt.mp4"
-        bad.write_text("das ist kein video")
-        bad_dst = bad.with_name("kaputt.h265.mp4")
-        ok, msg = convert_one(bad, bad_dst, "libx265", 30, probe(bad))
-        assert not ok and msg, "kaputte Datei haette scheitern muessen"
-        assert not bad_dst.exists(), "Teil-Datei nicht aufgeraeumt"
-
-        # verify() faengt eine abgeschnittene Ausgabe
-        assert verify(dst, src_dur=600.0), "zu kurze Datei haette auffallen muessen"
-
-        # Abbruch: ffmpeg beenden und die Teildatei wieder wegraeumen
-        cdst = src.with_name("cancel.mkv")
-        cancel = threading.Event()
-        cancel.set()
-        ok, msg = convert_one(src, cdst, "libx265", 30, info, cancel=cancel)
-        assert not ok and msg == "abgebrochen", (ok, msg)
-        assert not cdst.exists(), "Teil-Datei nach Abbruch nicht aufgeraeumt"
-
-        # avi kann kein HEVC -> Ziel muss mkv werden, sonst landet 'rawvideo' darin
-        assert target_for(Path("x.avi")).name == "x.h265.mkv"
-        assert target_for(Path("x.mkv")).name == "x.h265.mkv"
-        assert target_for(Path("x.MP4")).name == "x.h265.MP4"
-        avi = d / "alt.avi"
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
-             "-i", "testsrc=duration=3:size=320x240:rate=25", "-c:v", "mpeg4", str(avi)],
-            check=True, creationflags=NO_WINDOW)
-        ainfo = probe(avi)
-        assert ainfo["codec"] == "mpeg4", ainfo
-        adst = target_for(avi)
-        ok, msg = convert_one(avi, adst, "libx265", 30, ainfo)
-        assert ok, msg
-        assert probe(adst)["codec"] == "hevc", probe(adst)
-
-        # Netzlaufwerk-Variante: Original nach _alt/ statt in den Papierkorb
-        a, b = d / "orig.mkv", d / "sub" / "orig.mkv"
-        b.parent.mkdir()
-        a.write_text("x")
-        b.write_text("y")
-        assert move_to_alt(a) == d / ALT_DIR / "orig.mkv"
-        assert not a.exists() and (d / ALT_DIR / "orig.mkv").read_text() == "x"
-        # gleicher Name aus einem anderen Ordner darf nichts ueberschreiben
-        assert move_to_alt(b) == b.parent / ALT_DIR / "orig.mkv"
-        assert (d / ALT_DIR / "orig.mkv").read_text() == "x"
-        # Namenskollision im selben _alt
-        c = d / "orig.mkv"
-        c.write_text("z")
-        assert move_to_alt(c) == d / ALT_DIR / "orig_1.mkv"
-        assert not is_network(d), "TEMP ist kein Netzlaufwerk"
-    print("selftest ok")
-
-
 if __name__ == "__main__":
-    if "--selftest" in sys.argv:
-        selftest()
-    else:
-        root = tk.Tk()
-        App(root)
-        root.mainloop()
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
