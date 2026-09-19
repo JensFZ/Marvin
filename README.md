@@ -1,10 +1,15 @@
 # H265-Konverter
 
+[![Tests](https://github.com/JensFZ/Marvin/actions/workflows/ci.yml/badge.svg)](https://github.com/JensFZ/Marvin/actions/workflows/ci.yml)
+
 Kleines Windows-Tool, das einen Ordner nach Videodateien durchsucht, den Codec jeder Datei
 anzeigt und ausgewählte Dateien per ffmpeg nach H.265/HEVC umkodiert. Nach erfolgreicher
 Konvertierung wird das Original weggeräumt.
 
 Eine einzige Datei, kein Build-Schritt: [`h265gui.py`](h265gui.py).
+
+Wer kein Python installieren will, nimmt die fertige `h265gui.exe` aus den
+[Releases](https://github.com/JensFZ/Marvin/releases) — ffmpeg wird trotzdem gebraucht.
 
 ## Voraussetzungen
 
@@ -105,13 +110,40 @@ Netzlaufwerk erkannt wurde.
 ## Tests
 
 ```bash
-python h265gui.py --selftest
+pip install pytest send2trash
 ```
 
-Der Selftest erzeugt sich sein Testmaterial selbst und prüft die ganze Kette: Codec-Erkennung,
-Konvertierung mit Fortschrittsmeldungen, Übernahme der Audiospur, Abbruch mitsamt Aufräumen
-der Teildatei, kaputte Eingabedateien, die Laufzeitprüfung, die avi-nach-mkv-Zuordnung sowie
-das Verschieben nach `_alt` inklusive Namenskollisionen.
+```bash
+pytest
+```
+
+Die Tests erzeugen sich ihr Videomaterial selbst (ein paar Sekunden `testsrc`) und decken
+Codec-Erkennung, den zusammengebauten ffmpeg-Aufruf, Konvertierung mit Fortschrittsmeldungen,
+Übernahme von Ton- und Untertitelspuren, Abbruch mitsamt Aufräumen der Teildatei, kaputte
+Eingabedateien, die Laufzeitprüfung, die avi-nach-mkv-Zuordnung und das Verschieben nach `_alt`
+inklusive Namenskollisionen ab.
+
+Wer ffmpeg nicht installiert hat, lässt die kodierenden Tests weg:
+
+```bash
+pytest -m "not ffmpeg"
+```
+
+## Entwicklung
+
+`.github/workflows/ci.yml` lässt die Tests bei jedem Push auf `main` und bei jedem Pull Request
+auf einem Windows-Runner laufen.
+
+Ein Release entsteht aus einem Versions-Tag:
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+`.github/workflows/release.yml` führt dann die Tests aus, baut mit PyInstaller eine
+eigenständige `h265gui.exe` (rund 16 MB, Python und `send2trash` eingepackt) und hängt sie an
+einen GitHub-Release. Schlagen die Tests fehl, entsteht kein Release. Der Workflow lässt sich
+auch von Hand über *Actions → Release → Run workflow* starten.
 
 ## Grenzen
 
