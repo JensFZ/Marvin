@@ -546,3 +546,21 @@ def test_ausreichende_ersparnis_ersetzt_original(app, tmp_path, monkeypatch):
     assert app.tree.set(str(neu), "saved") == saving_text(alt_size, neu.stat().st_size)
     assert app.saved == alt_size - neu.stat().st_size
     assert "OK folge.mkv" in logtext(app)
+
+
+def test_manuell_hinzufuegen_ohne_ordner_und_ohne_doppelte(app, tmp_path):
+    """Drop/Dateiauswahl: Dateien und Ordner anhaengen, _alt und Doppelte auslassen."""
+    (tmp_path / "a.mkv").write_text("x")
+    (tmp_path / "notiz.txt").write_text("x")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.mp4").write_text("x")
+    (tmp_path / "sub" / ALT_DIR).mkdir()
+    (tmp_path / "sub" / ALT_DIR / "alt.mkv").write_text("x")
+    app.scan(h265gui.find_videos([tmp_path / "a.mkv", tmp_path / "notiz.txt", tmp_path / "sub"]))
+    drain(app)
+    assert app.folder is None
+    assert set(app.tree.get_children()) == {str(tmp_path / "a.mkv"), str(tmp_path / "sub" / "b.mp4")}
+    assert app.tree.item(str(tmp_path / "a.mkv"), "text") == str(tmp_path / "a.mkv")
+    app.set_busy(False)
+    app.add_paths([tmp_path / "a.mkv"])
+    assert not app.busy and app.file_lbl.cget("text") == "keine neuen Videodateien"

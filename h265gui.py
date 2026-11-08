@@ -36,6 +36,11 @@ try:
 except ImportError:
     send2trash = None
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except ImportError:
+    TkinterDnD = None
+
 
 # ---------------------------------------------------------------- ffmpeg-Teil
 
@@ -211,6 +216,17 @@ def remove_original(src, permanent=False):
 
 # -------------------------------------------------------------------- Helfer
 
+def find_videos(paths):
+    """Videodateien aus Dateien und (rekursiv) Ordnern, sortiert und ohne _alt-Inhalt."""
+    out = set()
+    for p in map(Path, paths):
+        for f in (p.rglob("*") if p.is_dir() else [p]):
+            if (f.is_file() and f.suffix.lower() in VIDEO_EXT
+                    and ALT_DIR not in f.parts):   # weggeraeumte Originale nicht erneut anbieten
+                out.add(f)
+    return sorted(out)
+
+
 def human_size(n):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
@@ -285,6 +301,11 @@ class App:
         self.start_btn = ttk.Button(bar, text="Konvertieren", command=self.on_start)
         self.start_btn.pack(side="right", padx=6)
 
+        self.drop = ttk.Label(root, anchor="center", relief="groove", padding=12,
+                              text="Videodateien oder Ordner hierher ziehen - oder klicken")
+        self.drop.pack(fill="x", padx=8, pady=(8, 0))
+        self.drop.bind("<Button-1>", lambda e: self.pick_files())
+
         self.tree = ttk.Treeview(root, columns=("codec", "size", "dur", "saved"),
                                  selectmode="extended")
         self.tree.heading("#0", text="Datei")
@@ -320,6 +341,15 @@ class App:
             self.write_log("Hinweis: send2trash nicht installiert - Originale werden "
                            "endgueltig geloescht statt in den Papierkorb verschoben. "
                            "Abhilfe: pip install send2trash")
+        try:
+            # tkdnd in den laufenden Interpreter laden (das macht sonst TkinterDnD.Tk())
+            TkinterDnD._require(root)
+            for w in (self.drop, self.tree):
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<Drop>>", self.on_drop)
+        except Exception:
+            self.drop.configure(text="Klicken, um Videodateien hinzuzufuegen "
+                                     "(Drag&Drop braucht: pip install tkinterdnd2)")
         root.after(100, self.pump)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -345,13 +375,18 @@ class App:
         path, info, size = p
         info["size"] = size
         self.info[str(path)] = info
-        self.tree.insert("", "end", iid=str(path),
-                         text=str(path.relative_to(self.folder)),
+        self.tree.insert("", "end", iid=str(path), text=self.label(path),
                          values=(info["codec"], human_size(size), human_dur(info["dur"]), ""),
                          tags=("already",) if info["codec"] == "hevc" else ())
 
-    def _on_scandone(self, n):
-        self.file_lbl.configure(text=f"{n} Videodateien gefunden")
+    def label(self, path):
+        """Relativ zum gewaehlten Ordner, sonst (manuell hinzugefuegt) der volle Pfad."""
+        if self.folder and path.is_relative_to(self.folder):
+            return str(path.relative_to(self.folder))
+        return str(path)
+
+    def _on_scandone(self, text):
+        self.file_lbl.configure(text=text)
         self.set_busy(False)
 
     def _on_log(self, text):
@@ -385,7 +420,7 @@ class App:
         self.info[str(dst)] = info
         self.saved += old_size - new_size
         self.tree.insert("", idx, iid=str(dst),
-                         text=str(dst.relative_to(self.folder)),
+                         text=self.label(dst),
                          values=(info["codec"], human_size(new_size),
                                  human_dur(info["dur"]), saving_text(old_size, new_size)),
                          tags=("done",))
@@ -425,14 +460,41 @@ class App:
                            f"sofern 'endgueltig loeschen' nicht angehakt ist.")
         threading.Thread(target=self.scan, daemon=True).start()
 
-    def scan(self):
-        files = sorted(p for p in self.folder.rglob("*")
-                       if p.is_file() and p.suffix.lower() in VIDEO_EXT
-                       and ALT_DIR not in p.parts)   # weggeraeumte Originale nicht erneut anbieten
+    def pick_files(self):
+        if self.busy:
+            return
+        exts = " ".join("*" + e for e in sorted(VIDEO_EXT))
+        files = filedialog.askopenfilenames(title="Videodateien hinzufuegen",
+                                            filetypes=[("Videos", exts), ("Alle", "*.*")])
+        if files:
+            self.add_paths(files)
+
+    def on_drop(self, event):
+        if not self.busy:
+            self.add_paths(self.root.tk.splitlist(event.data))
+        return event.action
+
+    def add_paths(self, paths):
+        """Dateien/Ordner an die Liste anhaengen; schon gelistete werden uebersprungen."""
+        new = [p for p in find_videos(paths) if str(p) not in self.info]
+        if not new:
+            self.file_lbl.configure(text="keine neuen Videodateien")
+            return
+        if any(is_network(p) for p in {p.parent for p in new}):
+            self.write_log(f"Netzlaufwerk erkannt - Originale werden nach {ALT_DIR}\\ "
+                           f"verschoben, sofern 'endgueltig loeschen' nicht angehakt ist.")
+        self.set_busy(True)   # sperrt weitere Drops, bis die Zeilen da sind
+        self.file_lbl.configure(text="lese Dateien...")
+        threading.Thread(target=self.scan, args=(new, f"{len(new)} Dateien hinzugefuegt"),
+                         daemon=True).start()
+
+    def scan(self, files=None, done_text=None):
+        if files is None:
+            files = find_videos([self.folder])
         with ThreadPoolExecutor(max_workers=8) as pool:
             for path, info in zip(files, pool.map(probe, files)):
                 self.q.put(("row", (path, info, path.stat().st_size)))
-        self.q.put(("scandone", len(files)))
+        self.q.put(("scandone", done_text or f"{len(files)} Videodateien gefunden"))
 
     def select_convertible(self):
         self.tree.selection_set([iid for iid in self.tree.get_children()
