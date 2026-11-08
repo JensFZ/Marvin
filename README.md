@@ -18,13 +18,14 @@ Wer kein Python installieren will, nimmt die fertige `h265gui.exe` aus den
 | Python | 3.9 oder neuer, mit tkinter (bei den üblichen Windows-Installern dabei) |
 | ffmpeg | `ffmpeg` **und** `ffprobe` müssen im `PATH` liegen |
 | send2trash | optional, für den Papierkorb — ohne das Paket wird endgültig gelöscht |
+| tkinterdnd2 | optional, für Drag & Drop — ohne das Paket öffnet ein Klick auf die Fläche die Dateiauswahl |
 
 ```bash
 winget install Gyan.FFmpeg
 ```
 
 ```bash
-pip install send2trash
+pip install send2trash tkinterdnd2
 ```
 
 Fehlt ffmpeg, meldet das Programm das beim Start. Fehlt `send2trash`, erscheint ein Hinweis
@@ -42,6 +43,9 @@ python h265gui.py
 
 1. **Ordner wählen** — der Ordner wird rekursiv durchsucht. Erkannt werden `.mkv`, `.mp4`,
    `.m4v`, `.avi`, `.mov`, `.wmv`, `.flv`, `.webm`, `.mpg`, `.mpeg`, `.ts`, `.m2ts`.
+   Alternativ einzelne **Dateien oder Ordner in die Fläche über der Liste ziehen** (oder auf
+   die Fläche klicken und Dateien auswählen). Sie werden an die Liste angehängt, schon gelistete
+   Dateien übersprungen. *Ordner wählen* leert die Liste dagegen und fängt neu an.
 2. Die Liste zeigt Datei, Codec, Größe und Laufzeit. Dateien, die **bereits HEVC** sind,
    erscheinen grau und werden von der Konvertierung ausgenommen.
 3. **Auswählen** per Strg- bzw. Shift-Klick, oder über *Alle nicht-HEVC wählen*.
@@ -159,7 +163,7 @@ git tag v1.0.0 && git push origin v1.0.0
 ```
 
 `.github/workflows/release.yml` führt dann die Tests aus, baut mit PyInstaller eine
-eigenständige `h265gui.exe` (rund 16 MB, Python und `send2trash` eingepackt) und hängt sie an
+eigenständige `h265gui.exe` (rund 16 MB, Python, `send2trash` und `tkinterdnd2` eingepackt) und hängt sie an
 einen GitHub-Release. Schlagen die Tests fehl, entsteht kein Release. Vor dem Veröffentlichen
 wird die gebaute Exe mit `--selfcheck` tatsächlich gestartet: Sie baut das Fenster auf und
 beendet sich wieder. Fehlt `send2trash` in der Exe, endet der Check mit Exit-Code 3 und der
